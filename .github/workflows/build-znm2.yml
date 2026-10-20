@@ -1,0 +1,107 @@
+name: Build ZN-M2 (VIKINGYFY/immortalwrt owrt)
+
+# 每日基于 VIKINGYFY/immortalwrt 的 owrt 分支，为 ZN-M2 (qualcommax/ipq60xx) 出固件。
+# 不需要 fork 源码仓库：本 workflow 运行时浅克隆 owrt 分支，套上 Config/znm2.seed.config。
+
+on:
+  schedule:
+    # 每天 04:00 (UTC+8) 滚动编译 owrt 分支
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Config/**'
+      - '.github/**'
+
+permissions:
+  contents: write   # 发 Release 需要
+
+concurrency:
+  group: build-znm2
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3-setuptools python3-pip \
+            unzip zlib1g-dev file wget rsync patch vim-common ccache ecj \
+            libc6-dev-i386 libev-dev
+          echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"
+
+      - name: Clone source (owrt branch, shallow)
+        run: |
+          git clone --depth 1 --branch owrt https://github.com/VIKINGYFY/immortalwrt openwrt
+
+      - name: Restore cache (dl + ccache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/dl
+            ${{ github.workspace }}/.ccache
+          key: znm2-owrt-cache
+          restore-keys: |
+            znm2-owrt-cache
+
+      - name: Prepare config
+        run: |
+          cd openwrt
+          # OpenClash 通过独立 feed 引入 (vernesong/OpenClash dev 分支)
+          echo "src-git openclash https://github.com/vernesong/OpenClash.git;dev" >> feeds.conf.default
+          cp ../Config/znm2.seed.config .config
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make defconfig
+
+      - name: Build
+        run: |
+          cd openwrt
+          make -j"$(nproc)" || make -j1 V=s
+
+      - name: Collect source commit & date
+        id: meta
+        run: |
+          echo "commit=$(git -C openwrt rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date +'%Y.%m.%d-%H%M')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-znm2-${{ steps.meta.outputs.date }}
+          path: openwrt/bin/targets/qualcommax/ipq60xx/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zn-m2-owrt-latest
+          overwrite: true
+          name: ZN-M2 owrt ${{ steps.meta.outputs.date }}
+          body: |
+            Source: VIKINGYFY/immortalwrt @ owrt ${{ steps.meta.outputs.commit }}
+            Target: qualcommax / ipq60xx / zn_m2
+            Built : ${{ steps.meta.outputs.date }} (UTC)
+          files: openwrt/bin/targets/qualcommax/ipq60xx/*
