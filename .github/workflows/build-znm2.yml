@@ -67,23 +67,26 @@ jobs:
 
       - name: Prepare config
         run: |
-          cd openwrt
+          OPENWRT="${GITHUB_WORKSPACE}/openwrt"
+          # 诊断：确认配置与源码就位
+          ls -l "${GITHUB_WORKSPACE}/Config/"
           # OpenClash 通过独立 feed 引入 (vernesong/OpenClash dev 分支)
-          echo "src-git openclash https://github.com/vernesong/OpenClash.git;dev" >> feeds.conf.default
-          cp ../Config/znm2.seed.config .config
+          echo "src-git openclash https://github.com/vernesong/OpenClash.git;dev" >> "${OPENWRT}/feeds.conf.default"
+          cp "${GITHUB_WORKSPACE}/Config/znm2.seed.config" "${OPENWRT}/.config"
+          cd "${OPENWRT}"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           make defconfig
 
       - name: Build
         run: |
-          cd openwrt
+          cd "${GITHUB_WORKSPACE}/openwrt"
           make -j"$(nproc)" || make -j1 V=s
 
       - name: Collect source commit & date
         id: meta
         run: |
-          echo "commit=$(git -C openwrt rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git -C "${GITHUB_WORKSPACE}/openwrt" rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(date +'%Y.%m.%d-%H%M')" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifact
