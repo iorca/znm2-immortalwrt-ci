@@ -1,12 +1,14 @@
 name: Build ZN-M2 (VIKINGYFY/immortalwrt owrt)
 
-# 每日基于 VIKINGYFY/immortalwrt 的 owrt 分支，为 ZN-M2 (qualcommax/ipq60xx) 出固件。
+# 每两周为 ZN-M2 (qualcommax/ipq60xx) 出一次固件，源码取 VIKINGYFY/immortalwrt 的 owrt 分支。
 # 不需要 fork 源码仓库：本 workflow 运行时浅克隆 owrt 分支，套上 Config/znm2.seed.config。
+# 频率：cron 每周一触发，gate 步骤按 ISO 周奇偶决定——偶数周才真编译（= 每 14 天一次）。
+# 手动 workflow_dispatch / 推送 Config 改动不受 gate 限制，始终编译。
 
 on:
   schedule:
-    # 每天 04:00 (UTC+8) 滚动编译 owrt 分支
-    - cron: '0 20 * * *'
+    # 每周一 04:00 (UTC+8) 触发；实际每两周编一次由下方 gate 控制
+    - cron: '0 20 * * 1'
   workflow_dispatch:
   push:
     paths:
@@ -30,7 +32,21 @@ jobs:
       - name: Checkout CI repo
         uses: actions/checkout@v4
 
+      # 每两周一次：schedule 触发时按 ISO 周奇偶决定是否编译；手动/推送始终编译
+      - name: Biweekly gate (每两周编一次)
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            WEEK=$(date +%V)
+            if [ $((10#$WEEK % 2)) -eq 0 ]; then BUILD=true; else BUILD=false; fi
+          else
+            BUILD=true
+          fi
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+          echo "event=${{ github.event_name }} iso_week=$(date +%V) -> build=${BUILD}"
+
       - name: Maximize build space
+        if: steps.gate.outputs.build == 'true'
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 2048
@@ -42,6 +58,7 @@ jobs:
           remove-docker-images: 'true'
 
       - name: Install build dependencies
+        if: steps.gate.outputs.build == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -52,10 +69,12 @@ jobs:
           echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"
 
       - name: Clone source (owrt branch, shallow)
+        if: steps.gate.outputs.build == 'true'
         run: |
           git clone --depth 1 --branch owrt https://github.com/VIKINGYFY/immortalwrt openwrt
 
       - name: Restore cache (dl + ccache)
+        if: steps.gate.outputs.build == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -66,9 +85,9 @@ jobs:
             znm2-owrt-cache
 
       - name: Prepare config
+        if: steps.gate.outputs.build == 'true'
         run: |
           OPENWRT="${GITHUB_WORKSPACE}/openwrt"
-          # 诊断：确认配置与源码就位
           ls -l "${GITHUB_WORKSPACE}/Config/"
           # OpenClash 通过独立 feed 引入 (vernesong/OpenClash dev 分支)
           echo "src-git openclash https://github.com/vernesong/OpenClash.git;dev" >> "${OPENWRT}/feeds.conf.default"
@@ -79,17 +98,20 @@ jobs:
           make defconfig
 
       - name: Build
+        if: steps.gate.outputs.build == 'true'
         run: |
           cd "${GITHUB_WORKSPACE}/openwrt"
           make -j"$(nproc)" || make -j1 V=s
 
       - name: Collect source commit & date
         id: meta
+        if: steps.gate.outputs.build == 'true'
         run: |
           echo "commit=$(git -C "${GITHUB_WORKSPACE}/openwrt" rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(date +'%Y.%m.%d-%H%M')" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware artifact
+        if: steps.gate.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: immortalwrt-znm2-${{ steps.meta.outputs.date }}
@@ -97,7 +119,9 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # 自动发布：固定 tag + overwrite，每次覆盖同一个 release，永远是“最新一份”，不堆积
       - name: Publish rolling release
+        if: steps.gate.outputs.build == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: zn-m2-owrt-latest
