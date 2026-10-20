@@ -54,6 +54,7 @@
 - **加别的 luci 插件**（如 passwall / homeproxy）：仿照 OpenClash，先在 workflow 的 `Prepare config` 步骤里 `echo "src-git xxx ..." >> feeds.conf.default` 加对应 feed，再在 seed 里加 `CONFIG_PACKAGE_luci-app-xxx=y`。
 
 ## 排查
+- **顺序陷阱（重要）**：`easimon/maximize-build-space` 会把新 LVM 卷挂到 workspace 路径、盖住已检出文件，所以它必须放在 `actions/checkout` **之前**（现顺序：gate → maximize → checkout）。若报 `Config/` 或 `.config` 找不到，先查这两步顺序。
 - 若构建报 “no target device” / 选不到 zn_m2：设备符号应为 `CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_zn_m2=y`（已修正，原错写少一段 `DEVICE_`）。
 - 首次冷编译很慢且吃磁盘；`easimon/maximize-build-space` 已清掉 dotnet/android/haskell 等腾空间，`dl` 与 `ccache` 已缓存，二次编译明显更快。
 - owrt 分支用的是 APK 包管理器（非 opkg），镜像仍落在 `bin/targets/qualcommax/ipq60xx/`。

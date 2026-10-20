@@ -4,6 +4,9 @@ name: Build ZN-M2 (VIKINGYFY/immortalwrt owrt)
 # 不需要 fork 源码仓库：本 workflow 运行时浅克隆 owrt 分支，套上 Config/znm2.seed.config。
 # 频率：cron 每周一触发，gate 步骤按 ISO 周奇偶决定——偶数周才真编译（= 每 14 天一次）。
 # 手动 workflow_dispatch / 推送 Config 改动不受 gate 限制，始终编译。
+#
+# 顺序陷阱：easimon/maximize-build-space 会把新 LVM 卷挂到 workspace 路径，盖住已检出文件，
+# 所以它必须放在 checkout 之前跑（官方用法即第一步）。
 
 on:
   schedule:
@@ -29,10 +32,7 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
-      - name: Checkout CI repo
-        uses: actions/checkout@v4
-
-      # 每两周一次：schedule 触发时按 ISO 周奇偶决定是否编译；手动/推送始终编译
+      # 1) gate 最先跑（不需要仓库），决定是否真编译；奇数周直接秒退
       - name: Biweekly gate (每两周编一次)
         id: gate
         run: |
@@ -45,6 +45,7 @@ jobs:
           echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
           echo "event=${{ github.event_name }} iso_week=$(date +%V) -> build=${BUILD}"
 
+      # 2) 先扩盘：LVM 会挂到 workspace 路径，必须早于 checkout，否则盖住已检出文件
       - name: Maximize build space
         if: steps.gate.outputs.build == 'true'
         uses: easimon/maximize-build-space@master
@@ -56,6 +57,11 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
+
+      # 3) 扩盘后再 checkout，文件才会落到扩容后的卷上
+      - name: Checkout CI repo
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/checkout@v4
 
       - name: Install build dependencies
         if: steps.gate.outputs.build == 'true'
